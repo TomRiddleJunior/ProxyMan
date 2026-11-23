@@ -98,6 +98,10 @@ pool:
   # Minimum consecutive successful checks before a proxy is published
   # (raised from 1: one lucky pass should not ship a proxy)
   min_successful_checks: 2
+  # Safety valve: never validate more than this many candidates in one run.
+  # A single bloated source (some dumps ship 100k+ junk entries) must not turn
+  # a run into a mass probe; excess is randomly sampled.
+  max_candidates: 25000
   # Bounded state: known-dead hosts expire on this shorter clock so the pool
   # file cannot grow forever; max_entries is the hard ceiling.
   dead_retention_days: 3
@@ -107,10 +111,10 @@ pool:
   revival_within_hours: 24
   revival_limit: 500
 # Keyless plain-text proxy lists (GitHub raw dumps, direct API lists).
-# Broad, overlapping coverage: the pipeline dedups candidates and auto-disables
-# chronically dead sources, so a wider net is safe and raises the live yield.
+# Kept deliberately LEAN: broad aggregators that yield most of the pool.
+# Some public dumps carry 100k+ junk entries and would turn every run into a
+# 10-minute mass probe - the max_candidates cap below is the backstop.
 list_sources:
-  # Large, frequently-refreshed aggregators
   - "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
   - "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.txt"
   - "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
@@ -125,20 +129,6 @@ list_sources:
   - "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt"
   - "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt"
   - "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt"
-  # Additional maintained dumps
-  - "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt"
-  - "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt"
-  - "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt"
-  - "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt"
-  - "https://raw.githubusercontent.com/ALIILAPRO/Proxy/main/http.txt"
-  - "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/http_proxies.txt"
-  - "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/socks5_proxies.txt"
-  - "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt"
-  - "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt"
-  - "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"
-  - "https://raw.githubusercontent.com/prxchk/proxy-list/main/socks5.txt"
-  - "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/socks5/socks5.txt"
-  # Direct list APIs
   - "https://www.proxy-list.download/api/v1/get?type=http"
   - "https://www.proxy-list.download/api/v1/get?type=socks5"
 

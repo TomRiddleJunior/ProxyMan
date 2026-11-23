@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import random
 import argparse
 import asyncio
 import logging
@@ -209,6 +210,16 @@ async def amain():
     skipped = len(all_candidates) - len(candidates)
     if skipped:
         logger.info("[Pool] Skipped %d known-dead candidates (stability filter).", skipped)
+
+    # Safety valve: a single bloated source must never turn a run into a mass
+    # probe (some public dumps carry 100k+ junk entries). Cap the validation set
+    # and sample randomly; known-dead entries were already skipped above.
+    max_candidates = getattr(config.pool, "max_candidates", 0)
+    if max_candidates and len(candidates) > max_candidates:
+        random.shuffle(candidates)
+        logger.warning("[Pool] %d candidates exceed the %d cap - sampling %d this run.",
+                       len(candidates), max_candidates, max_candidates)
+        candidates = candidates[:max_candidates]
 
     if not candidates:
         logger.warning("Queue is empty. Shutting down.")

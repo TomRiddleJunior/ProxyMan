@@ -112,6 +112,9 @@ class PoolConfig:
     # feed after a transient failure are re-seeded into the checker.
     revival_within_hours: int = 24
     revival_limit: int = 500
+    # Safety valve: hard cap on candidates validated per run (a bloated source
+    # must never turn a run into a mass probe).
+    max_candidates: int = 25000
 
 
 @dataclass
@@ -208,6 +211,7 @@ def load_config(config_path: str = "config.yaml") -> AppConfig:
         max_entries=int(p_data.get("max_entries", 200000)),
         revival_within_hours=int(p_data.get("revival_within_hours", 24)),
         revival_limit=int(p_data.get("revival_limit", 500)),
+        max_candidates=int(p_data.get("max_candidates", 25000)),
     )
 
     list_sources = data.get("list_sources", []) or []
