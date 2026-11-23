@@ -1,0 +1,9 @@
+[Unit]
+Description=Run ProxyMan harvest every 2 hours
+
+[Timer]
+OnCalendar=*-*-* 0,2,4,6,8,10,12,14,16,18,20,22:05:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

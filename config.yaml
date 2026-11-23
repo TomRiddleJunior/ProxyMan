@@ -1,0 +1,178 @@
+# Proxyman High-Performance OSINT Configuration
+
+# Validation Settings
+validation:
+  test_urls:
+    - "http://httpbin.org/headers"
+    - "http://postman-echo.com/headers"
+    
+  ssl_test_url: "https://www.google.com"
+  connect_timeout: 3.0
+  read_timeout: 5.5
+  timeout: 9.0
+  max_concurrency: 400
+  # Prove each proxy routes traffic by fetching our public IP THROUGH it.
+  # Adds one round trip per validated candidate; latency is reported as
+  # this honest end-to-end RTT when verification succeeds.
+  verify_exit: true
+  # Echo endpoints tried in order until one answers through the proxy.
+  # Multiple endpoints remove the single point of failure that used to
+  # downgrade most of the pool to "unverified".
+  exit_endpoints:
+    - "http://api.ipify.org/?format=json"
+    - "http://ip-api.com/json?fields=query"
+    - "http://ifconfig.me/ip"
+    - "http://checkip.amazonaws.com/"
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# Hard publish gate: only proxies whose traffic was PROVEN to route through
+# them are published. A port that merely answers a SOCKS5 greeting is not a
+# usable proxy - it is a dead proxy wearing a live one's coat.
+publish:
+  verified_only: true
+  # If the runner's own public IP cannot be established, verification is
+  # impossible: publish handshake-validated entries for that run (honestly
+  # flagged verified_exit=false) instead of shipping an empty feed.
+  degrade_when_runner_ip_unknown: true
+
+# Premium tier (premium.txt): exit-verified + stable + fast + TLS-capable.
+# The "works right now, repeatedly" list.
+premium:
+  min_streak: 5          # consecutive proven-alive checks required
+  max_latency: 1.0       # honest end-to-end RTT ceiling (seconds)
+  require_ssl: true      # proxy must tunnel TLS (CONNECT to :443)
+
+# Feature A: Targeted validation — "site-ready" proxy lists.
+# Usage:  python main.py --mode harvest --target xvideos
+# Emits:  targets/<site>.txt  (proxies that actually reach the site)
+targets:
+  example:
+    urls:
+      - "http://example.com/"
+  google:
+    urls:
+      - "https://www.google.com/generate_204"
+  amazon:
+    urls:
+      - "https://www.amazon.com/"
+
+# Feature B: ASN / hosting-kind classification (ip-api.com free batch API).
+# Tags every published proxy residential/datacenter/unknown and emits
+# residential.txt / datacenter.txt splits. Results cached in pool state.
+asn:
+  enabled: true
+  batch_api: "http://ip-api.com/batch"
+  rate_limit_rpm: 15
+
+# Output settings
+output:
+  output_dir: "./output"
+  formats:
+    - json
+    - txt
+    - csv
+  # Speed tier threshold: proxies under this latency land in fast.txt
+  fast_latency_threshold: 0.5
+
+# Per-source effectiveness & auto-disable
+sources:
+  state_file: "./state/source_stats.json"
+  # Disable a source when its live ratio drops below this over the last 3 runs
+  min_live_ratio: 0.02
+  # Minimum checks collected before judging a source
+  min_checks: 50
+  # How many runs a disabled source stays skipped before re-enabling
+  disable_runs: 48
+  # Forget day-buckets older than this
+  retention_days: 14
+
+# Pool stability scoring
+pool:
+  state_file: "./state/pool_state.json"
+  # Drop a host after this many consecutive failed validation runs
+  max_consecutive_failures: 3
+  # Re-test known-dead hosts every N runs (to catch revivals)
+  retest_interval: 8
+  # Forget entries not seen for this many days
+  retention_days: 14
+  # Minimum consecutive successful checks before a proxy is published
+  # (raised from 1: one lucky pass should not ship a proxy)
+  min_successful_checks: 2
+  # Bounded state: known-dead hosts expire on this shorter clock so the pool
+  # file cannot grow forever; max_entries is the hard ceiling.
+  dead_retention_days: 3
+  max_entries: 200000
+  # Compounding pool: re-seed the checker with proxies proven alive in the
+  # last 24h that dropped out of the feed after a transient failure.
+  revival_within_hours: 24
+  revival_limit: 500
+# Keyless plain-text proxy lists (GitHub raw dumps, direct API lists).
+# Broad, overlapping coverage: the pipeline dedups candidates and auto-disables
+# chronically dead sources, so a wider net is safe and raises the live yield.
+list_sources:
+  # Large, frequently-refreshed aggregators
+  - "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
+  - "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.txt"
+  - "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+  - "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt"
+  - "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt"
+  - "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt"
+  - "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt"
+  - "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt"
+  - "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt"
+  - "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt"
+  - "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies.txt"
+  - "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt"
+  - "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt"
+  - "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt"
+  # Additional maintained dumps
+  - "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt"
+  - "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt"
+  - "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt"
+  - "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt"
+  - "https://raw.githubusercontent.com/ALIILAPRO/Proxy/main/http.txt"
+  - "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/http_proxies.txt"
+  - "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/socks5_proxies.txt"
+  - "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt"
+  - "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt"
+  - "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"
+  - "https://raw.githubusercontent.com/prxchk/proxy-list/main/socks5.txt"
+  - "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/socks5/socks5.txt"
+  # Direct list APIs
+  - "https://www.proxy-list.download/api/v1/get?type=http"
+  - "https://www.proxy-list.download/api/v1/get?type=socks5"
+
+# Keyless HTML table proxy lists
+html_sources:
+  - "https://free-proxy-list.net/"
+  - "https://www.socks-proxy.net/"
+  - "https://www.sslproxies.org/"
+  - "https://www.us-proxy.org/"
+
+# OSINT Search Engines Config
+search_engines:
+  shodan:
+    queries:
+      - "port:1080 product:socks5"
+      - "port:8080 \"HTTP/1.1 200\""
+      - "port:3128 \"HTTP/1.1 200\""
+  censys:
+    queries:
+      - "services.port: 1080 and services.service_name: SOCKS5"
+      - "services.port: 8080 and services.service_name: HTTP"
+      - "services.port: 3128 and services.service_name: HTTP"
+  zoomeye:
+    queries:
+      - "port:1080 +service:socks5"
+      - "port:8080 +service:http"
+      - "port:3128 +service:http"
+  criminalip:
+    queries:
+      - "port: 1080"
+      - "port: 8080"
+      - "port: 3128"
+  fofa:
+    queries:
+      - 'port="1080" && protocol="socks5"'
+      - 'port="8080" && protocol="http"'
+      - 'port="3128" && protocol="http"'

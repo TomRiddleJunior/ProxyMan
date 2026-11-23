@@ -1,0 +1,16 @@
+[Unit]
+Description=ProxyMan harvester (scrape + validate + publish)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+#User=PLACEHOLDER
+#Group=PLACEHOLDER
+Type=oneshot
+EnvironmentFile=/etc/proxyman.env
+ExecStart=/opt/proxyman/run_harvester.sh
+StandardOutput=append:/var/log/proxyman/harvester.log
+StandardError=append:/var/log/proxyman/harvester.log
+
+[Install]
+WantedBy=multi-user.target

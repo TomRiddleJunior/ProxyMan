@@ -1,0 +1,138 @@
+name: ProxyChecker
+
+on:
+  # Runs on GitHub-hosted runners (ephemeral, shared Microsoft CI IPs) rather
+  # than a standing cloud VM: far less attributable, no stable IP to accumulate
+  # abuse reports. NOTE: GitHub throttles frequent crons (observed ~4 runs in
+  # 7h on */15), so freshness is best-effort; 30 min keeps GitHub load modest.
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    # Trigger manually via Action tab or: gh workflow run checker.yml
+
+# Only one publish to the feed repo at a time (harvester + checker share this group)
+concurrency:
+  group: feed-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  check-proxies:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python Runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Project Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Clone Public Assets Repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          # Safety: checkout must never contain this path (it is the clone target).
+          rm -rf public_list
+          git clone https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/TomRiddleJunior/ProxyMan-free-proxy-list.git public_list
+
+      - name: Restore Pool State Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          # SHARED with the harvester: both workflows must evolve ONE pool
+          # state (streaks, hosting cache, streaks drive the premium tier).
+          # Separate keys let the two states diverge and reset each other's
+          # streaks, which is exactly what numbs the compounding pool.
+          key: proxyman-pool-state
+          restore-keys: |
+            proxyman-pool-state-
+
+      - name: Execute Fast Re-Validation Loop (Check Mode)
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          ulimit -n 16384
+          # Run revalidation directly on public_list folder
+          python main.py --mode check --output-dir ./public_list
+
+      - name: Save Pool State Cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: proxyman-pool-state-${{ github.run_id }}
+
+      - name: Push Cleaned Pool to Public Repo
+        run: |
+          # SAFETY GUARD: history-reset must only ever hit the feed repo.
+          # If the clone target somehow resolves to this code repo, abort.
+          feed_url="https://github.com/TomRiddleJunior/ProxyMan-free-proxy-list.git"
+          self_url="$(git remote get-url origin)"
+          list_url="$(git -C public_list remote get-url origin)"
+          case "$list_url" in
+            *ProxyMan-free-proxy-list.git) ;;
+            *) echo "[!] ABORT: public_list remote is not the feed repo: $list_url" >&2; exit 1 ;;
+          esac
+          if [ "$list_url" = "$self_url" ]; then
+            echo "[!] ABORT: refusing to history-reset the code repository" >&2; exit 1
+          fi
+          cd public_list
+          # Defense-in-depth: verify the repo we are about to rewrite is the
+          # feed repo, resolved from INSIDE the directory (git may have
+          # walked up if .git is missing).
+          push_target="$(git remote get-url origin)"
+          case "$push_target" in
+            *ProxyMan-free-proxy-list.git*) ;;
+            *) echo "[!] ABORT: resolved origin is not the feed repo: $push_target" >&2; exit 1 ;;
+          esac
+          # Defense-in-depth: never publish a partial run. The storer writes
+          # .complete last; its absence means main.py did not finish cleanly.
+          if [ ! -f .complete ]; then
+            echo "[!] No completion marker - run did not finish cleanly. Skipping release."
+            exit 0
+          fi
+
+          # COLD-START / OUTAGE GUARD: never replace a healthy feed with a
+          # near-empty snapshot (verification outage / runner IP unknown).
+          if [ "$(wc -l < proxies.txt 2>/dev/null || echo 0)" -lt 25 ]; then
+            echo "[!] GUARD: too few live proxies - keeping previous feed snapshot."
+            exit 0
+          fi
+
+          # Copy fresh feed README (content) as README.md so GitHub renders it
+          cp ../README.feed.md README.md
+
+          git add .
+          # Keep the completion marker itself out of the public repo
+          git rm -q --cached .complete 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "No proxy changes detected. Skipping release."
+            exit 0
+          fi
+
+          # BLOAT FIX: history-reset publish. Each run rewrites the public repo
+          # to a single-root snapshot commit (orphan -> rename to main -> force
+          # push). The repo stays at ~one snapshot in size forever instead of
+          # growing MBs of cumulative list history like it did before.
+          # Raw URLs (raw.githubusercontent.com/.../main/proxies.txt) stay
+          # stable since they always serve branch HEAD.
+          git checkout --orphan snapshot-$GITHUB_RUN_NUMBER 2>/dev/null
+          git -c user.email="github-actions[bot]@users.noreply.github.com" \
+              -c user.name="github-actions[bot]" \
+              commit -q -m "snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+          git branch -M main
+          git push --force origin main
+          echo "Published snapshot (history-reset)."

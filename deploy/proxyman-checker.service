@@ -1,0 +1,16 @@
+[Unit]
+Description=ProxyMan checker (re-validate published pool)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+#User=PLACEHOLDER
+#Group=PLACEHOLDER
+Type=oneshot
+EnvironmentFile=/etc/proxyman.env
+ExecStart=/opt/proxyman/run_checker.sh
+StandardOutput=append:/var/log/proxyman/checker.log
+StandardError=append:/var/log/proxyman/checker.log
+
+[Install]
+WantedBy=multi-user.target

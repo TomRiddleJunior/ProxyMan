@@ -1,0 +1,132 @@
+name: ProxyHarvester
+
+on:
+  # Re-enabled on GitHub-hosted runners (ephemeral, shared Microsoft CI IPs)
+  # rather than a standing VM. 4-hourly keeps GitHub load modest while
+  # refilling the pool.
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+    # Trigger manually via Action tab or: gh workflow run harvester.yml
+
+# Only one publish to the feed repo at a time (harvester + checker share this group)
+concurrency:
+  group: feed-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  harvest-proxies:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python Runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Project Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Clone Public Assets Repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          # Safety: checkout must never contain this path (it is the clone target).
+          rm -rf public_list
+          git clone https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/TomRiddleJunior/ProxyMan-free-proxy-list.git public_list
+
+      - name: Restore Pool State Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          # SHARED with the checker: one evolving pool state for both workflows
+          # (streaks and the hosting cache must not diverge between runs).
+          key: proxyman-pool-state
+          restore-keys: |
+            proxyman-pool-state-
+
+      - name: Execute Validation Pipeline (Harvest Mode)
+        env:
+          SHODAN_API_KEY: ${{ secrets.SHODAN_API_KEY }}
+          CENSYS_API_ID: ${{ secrets.CENSYS_API_ID }}
+          CENSYS_API_SECRET: ${{ secrets.CENSYS_API_SECRET }}
+          ZOOMEYE_API_KEY: ${{ secrets.ZOOMEYE_API_KEY }}
+          CRIMINALIP_API_KEY: ${{ secrets.CRIMINALIP_API_KEY }}
+          FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
+          FOFA_API_KEY: ${{ secrets.FOFA_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          ulimit -n 16384
+          python main.py --mode harvest
+
+      - name: Publish to Public Repository
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          # SAFETY GUARD: history-reset must only ever hit the feed repo.
+          # If the clone target somehow resolves to this code repo, abort.
+          self_url="$(git remote get-url origin)"
+          list_url="$(git -C public_list remote get-url origin)"
+          case "$list_url" in
+            *ProxyMan-free-proxy-list.git) ;;
+            *) echo "[!] ABORT: public_list remote is not the feed repo: $list_url" >&2; exit 1 ;;
+          esac
+          if [ "$list_url" = "$self_url" ]; then
+            echo "[!] ABORT: refusing to history-reset the code repository" >&2; exit 1
+          fi
+          # Publish only when the run finished cleanly (marker written)
+          if [ -d "output" ] && [ -f "output/.complete" ]; then
+            # COLD-START / OUTAGE GUARD: never replace a healthy feed with a
+            # near-empty snapshot (verification outage / runner IP unknown).
+            if [ "$(wc -l < output/proxies.txt 2>/dev/null || echo 0)" -lt 25 ]; then
+              echo "[!] GUARD: too few live proxies - keeping previous feed snapshot."
+              exit 0
+            fi
+            # Clean the feed clone for a fresh snapshot, but NEVER touch .git:
+            # a vanished .git makes git walk up to the code repo's .git, which
+            # is how the 2026-09/10 wrong-repo force-push happened.
+            find public_list -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+            cp -r output/* public_list/
+            cp README.feed.md public_list/README.md
+
+            cd public_list
+            # Defense-in-depth: verify the repo we are about to rewrite is the
+            # feed repo, resolved from INSIDE the directory (git may have
+            # walked up if .git is missing).
+            push_target="$(git remote get-url origin)"
+            case "$push_target" in
+              *ProxyMan-free-proxy-list.git*) ;;
+              *) echo "[!] ABORT: resolved origin is not the feed repo: $push_target" >&2; exit 1 ;;
+            esac
+            git add -A
+            # BLOAT FIX: history-reset publish — single-root snapshot commit per
+            # run. Public repo stays at ~one snapshot size instead of growing
+            # cumulative list history (was 61MB+). Raw URLs stay stable (HEAD).
+            git checkout --orphan snapshot-$GITHUB_RUN_NUMBER 2>/dev/null
+            git -c user.email="github-actions[bot]@users.noreply.github.com" \
+                -c user.name="github-actions[bot]" \
+                commit -q -m "snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+            git branch -M main
+            git push --force origin main
+            echo "Published snapshot (history-reset)."
+          else
+            echo "[!] Empty harvest output. Skipping release update."
+          fi
+
+      - name: Save Pool State Cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: proxyman-pool-state-${{ github.run_id }}
